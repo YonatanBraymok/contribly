@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Logo } from "@/components/logo";
 import { SiteNav } from "@/components/site-nav";
 import "./globals.css";
 
@@ -33,8 +34,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-12">
           {children}
         </main>
-        <footer className="border-t border-black/10 px-6 py-6 text-center text-sm opacity-60 dark:border-white/15">
-          Contribly — find your next open-source contribution.
+        <footer className="border-t border-black/10 px-6 py-6 dark:border-white/15">
+          <div className="mx-auto flex max-w-5xl flex-col items-center gap-2.5 text-sm opacity-60">
+            <Logo variant="mark" label={null} className="h-3 w-auto" />
+            <p>Contribly — find your next open-source contribution.</p>
+          </div>
         </footer>
       </body>
     </html>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 70"
+     width="70" height="70" role="img" aria-labelledby="t">
+  <title id="t">Contribly</title>
+  <rect x="0" y="0" width="32" height="32" rx="6" fill="#1b4721"/>
+  <rect x="38" y="0" width="32" height="32" rx="6" fill="#2a6a30"/>
+  <rect x="0" y="38" width="32" height="32" rx="6" fill="#47954a"/>
+  <rect x="38" y="38" width="32" height="32" rx="6" fill="#6ac36c"/>
+</svg>

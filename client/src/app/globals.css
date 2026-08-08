@@ -10,6 +10,19 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Brand palette, sampled from the logo: a GitHub contribution-graph ramp
+     from an empty day (contrib-0) through four levels of activity. */
+  --color-contrib-0: #2a313c;
+  --color-contrib-1: #1b4721;
+  --color-contrib-2: #2a6a30;
+  --color-contrib-3: #47954a;
+  --color-contrib-4: #6ac36c;
+
+  /* Aliases for UI use — mid-ramp reads on both light and dark backgrounds. */
+  --color-brand: #2a6a30;
+  --color-brand-muted: #47954a;
+  --color-brand-bright: #6ac36c;
 }
 
 @media (prefers-color-scheme: dark) {
