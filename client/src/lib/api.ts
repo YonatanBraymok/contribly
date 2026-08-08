@@ -24,6 +24,34 @@ export type ApiResult<T> =
   | { ok: false; error: string };
 
 /**
+ * Turns a failed response into something a human can act on.
+ *
+ * The API's error handler sends `{ error, details }`, and `details` is usually
+ * the only part that says what actually broke — a bare "502 Bad Gateway" sends
+ * you looking at the gateway rather than at the query behind it.
+ */
+async function describeFailure(response: Response): Promise<string> {
+  const fallback = `${response.status} ${response.statusText}`;
+
+  try {
+    const body: unknown = await response.json();
+
+    if (typeof body === "object" && body !== null && "error" in body) {
+      const { error, details } = body as { error: unknown; details?: unknown };
+      const parts = [error, details]
+        .filter((part): part is string => typeof part === "string" && part !== "")
+        .join(" — ");
+
+      return parts ? `${response.status} ${parts}` : fallback;
+    }
+  } catch {
+    // Not JSON, or an empty body. The status line is all we have.
+  }
+
+  return fallback;
+}
+
+/**
  * Thin fetch wrapper that returns a result object instead of throwing, so pages
  * can render a degraded state when the API is down rather than erroring out.
  */
@@ -42,7 +70,7 @@ export async function apiFetch<T>(
     });
 
     if (!response.ok) {
-      return { ok: false, error: `${response.status} ${response.statusText}` };
+      return { ok: false, error: await describeFailure(response) };
     }
 
     return { ok: true, data: (await response.json()) as T };
