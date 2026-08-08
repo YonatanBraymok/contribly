@@ -1,0 +1,93 @@
+name: contribly
+
+services:
+  # ---------------------------------------------------------------------------
+  # Postgres + pgvector.
+  #
+  # Stands in for hosted Supabase during local development. On first boot of an
+  # empty volume it runs the auth shim and everything in supabase/migrations.
+  # Use `npm run docker:reset` to drop the volume and re-run them.
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: contribly-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-contribly}
+    ports:
+      - "${POSTGRES_PORT:-54322}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./supabase/local/00-bootstrap.sh:/docker-entrypoint-initdb.d/00-bootstrap.sh:ro
+      - ./supabase/migrations:/migrations:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-contribly}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Express API
+  # ---------------------------------------------------------------------------
+  server:
+    build:
+      context: ./server
+      target: dev
+    container_name: contribly-server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      CORS_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-contribly}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+    ports:
+      # Host port is configurable — 4000 is a popular default and may be taken.
+      - "${API_PORT:-4000}:4000"
+    volumes:
+      # Bind-mount source for hot reload; keep the image's node_modules.
+      - ./server:/app
+      - /app/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Next.js client
+  # ---------------------------------------------------------------------------
+  client:
+    build:
+      context: ./client
+      target: dev
+    container_name: contribly-client
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      # Browser-side calls go to the published host port...
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}
+      # ...while Server Components reach the API over the compose network.
+      API_INTERNAL_URL: http://server:4000
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - server
+
+volumes:
+  db-data:
