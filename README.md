@@ -102,9 +102,17 @@ Call them from the API via `supabase.rpc('match_repositories', { ... })`.
 > The `1536` dimension matches OpenAI `text-embedding-3-small`. Changing embedding
 > models means changing both the column type and `EMBEDDING_DIMENSIONS`.
 
-Row Level Security is on for all three tables: profiles are readable and
-writable only by their owner, while the repository and issue corpus is public
-read-only — writes go through the service role.
+Row Level Security is on for all tables: profiles are readable and writable only
+by their owner, the repository and issue corpus is public read-only, and
+`github_credentials` is reachable by the service role alone — writes go through
+the service role.
+
+> RLS is only half of it. Postgres checks `GRANT`s **before** it evaluates a
+> policy, so a table with policies but no grant is simply unreachable —
+> PostgREST answers `42501 permission denied` and the policies never run. Some
+> Supabase projects hand out those grants automatically via `ALTER DEFAULT
+> PRIVILEGES` and some do not, so every grant is stated explicitly in
+> `20260808000100_grants.sql`. Adding a table means adding its grants there.
 
 ## Authentication
 

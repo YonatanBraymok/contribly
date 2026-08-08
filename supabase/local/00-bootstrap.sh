@@ -42,13 +42,12 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'
     created_at timestamptz not null default now()
   );
 
-  -- Supabase grants these roles blanket table privileges in public and leans on
-  -- RLS to filter rows. Mirroring that locally is what makes a migration's
-  -- `revoke` meaningful here — without it nothing is granted in the first place,
-  -- every table looks locked down, and a missing policy would slip through.
+  -- Schema usage only. Deliberately no ALTER DEFAULT PRIVILEGES: table grants
+  -- come from supabase/migrations/*_grants.sql and nowhere else, so a table
+  -- added without a grant fails here exactly as it would on a hosted project
+  -- that does not hand them out automatically. Granting defaults here would
+  -- paper over precisely that mistake.
   grant usage on schema public to anon, authenticated, service_role;
-  alter default privileges in schema public
-    grant select, insert, update, delete on tables to anon, authenticated, service_role;
 
   -- Stand-in for Supabase's auth.uid(). Reads the same GUC PostgREST sets, so
   -- RLS policies behave locally the way they do in production.
