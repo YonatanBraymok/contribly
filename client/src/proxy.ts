@@ -15,11 +15,11 @@ import {
  */
 
 /**
- * Paths reachable without a session. Everything else redirects to /auth.
+ * Paths reachable without a session. Everything else redirects to /login.
  * `/` stays public so the landing page can explain the product before asking
  * anyone to hand over GitHub access.
  */
-const PUBLIC_PATHS = ["/", "/auth"];
+const PUBLIC_PATHS = ["/", "/login"];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(
@@ -27,9 +27,9 @@ function isPublicPath(pathname: string): boolean {
   );
 }
 
-function redirectToAuth(request: NextRequest, reason?: string): NextResponse {
+function redirectToLogin(request: NextRequest, reason?: string): NextResponse {
   const url = request.nextUrl.clone();
-  url.pathname = "/auth";
+  url.pathname = "/login";
   url.search = "";
 
   // Send the visitor back where they were headed once they are signed in.
@@ -47,10 +47,10 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   const isPublic = isPublicPath(request.nextUrl.pathname);
 
   // Without Supabase credentials there is no way to establish a session, so
-  // fail closed: public pages still render, everything else bounces to /auth,
+  // fail closed: public pages still render, everything else bounces to /login,
   // which explains what is missing.
   if (!isSupabaseConfigured()) {
-    return isPublic ? NextResponse.next() : redirectToAuth(request, "unconfigured");
+    return isPublic ? NextResponse.next() : redirectToLogin(request, "unconfigured");
   }
 
   // Reassigned by setAll below whenever Supabase rotates the session cookies.
@@ -82,11 +82,11 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   } = await supabase.auth.getUser();
 
   if (!user && !isPublic) {
-    return redirectToAuth(request);
+    return redirectToLogin(request);
   }
 
   // Already signed in and staring at the sign-in page — send them onward.
-  if (user && request.nextUrl.pathname === "/auth") {
+  if (user && request.nextUrl.pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = request.nextUrl.searchParams.get("next") ?? "/dashboard";
     url.search = "";

@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { signOut } from "@/app/auth/actions";
+import { signOut } from "@/app/login/actions";
 import { Logo } from "@/components/logo";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { getSessionUser } from "@/lib/supabase/server";
@@ -78,7 +78,7 @@ export async function SiteNav() {
           </div>
         ) : (
           <Link
-            href="/auth"
+            href="/login"
             className="rounded-full border border-black/15 px-4 py-1.5 text-sm font-medium transition-colors hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
           >
             Sign in

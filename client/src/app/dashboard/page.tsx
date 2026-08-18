@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   description: "Your GitHub profile signals and learning goals.",
 };
 
-/** Reached only with a session — proxy.ts redirects everyone else to /auth. */
+/** Reached only with a session — proxy.ts redirects everyone else to /login. */
 export default async function DashboardPage() {
   const result = await fetchProfile();
   const profile = result.ok ? result.data.profile : null;

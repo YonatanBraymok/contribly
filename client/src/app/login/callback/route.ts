@@ -53,7 +53,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const next = safeNextPath(searchParams.get("next"));
 
   const fail = (reason: string) =>
-    NextResponse.redirect(new URL(`/auth?error=${reason}`, origin));
+    NextResponse.redirect(new URL(`/login?error=${reason}`, origin));
 
   // GitHub sends the user back with an error when they decline consent.
   const providerError = searchParams.get("error");

@@ -17,7 +17,7 @@ const sessionSchema = z.object({
 });
 
 /**
- * Called by the client's /auth/callback once a session exists.
+ * Called by the client's /login/callback once a session exists.
  *
  * Two jobs: refresh the profile from the GitHub claims, and capture the
  * provider token before it is lost. Supabase hands that token back exactly
