@@ -16,6 +16,9 @@ apiRouter.get('/', (_req, res) => {
       '/api/v1',
       '/api/v1/auth/session',
       '/api/v1/me',
+      '/api/v1/me/sync',
+      '/api/v1/me/analysis',
+      '/api/v1/me/preferences',
     ],
   });
 });

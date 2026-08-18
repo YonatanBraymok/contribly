@@ -22,6 +22,7 @@ issues worth their next weekend.
 contribly/
 ├── client/                 Next.js app
 │   ├── src/app/            App Router routes
+│   ├── src/app/onboarding/ First-run questionnaire
 │   ├── src/components/     Shared UI
 │   ├── src/lib/api.ts      Typed API client
 │   └── Dockerfile          deps → dev → build → production
@@ -32,6 +33,9 @@ contribly/
 │   ├── src/routes/         Route modules
 │   ├── src/middleware/     Error handling
 │   ├── src/lib/supabase.ts Service-role Supabase client
+│   ├── src/lib/github/     Minimal GitHub REST client
+│   ├── src/lib/profile/    Profile analysis — see below
+│   ├── src/scripts/        Fixture harness for tuning the heuristics
 │   └── Dockerfile          deps → dev → build → production
 ├── supabase/
 │   ├── migrations/         Schema, applied in filename order
@@ -84,7 +88,7 @@ Migrations live in `supabase/migrations/` and are plain, Supabase-native SQL.
 
 | Table                | Purpose                                                        |
 | -------------------- | -------------------------------------------------------------- |
-| `users`              | Profile: detected stack, complexity level, learning goals, and the `profile_embedding` used as the match query |
+| `users`              | Profile: detected stack, complexity level, stated preferences, the `analysis` blob behind them, and the `profile_embedding` that will become the match query |
 | `github_credentials` | The user's GitHub access token. Service-role only — RLS on, no policies |
 | `repositories` | Curated corpus with an `embedding` over description + topics + language |
 | `issues`       | Individual contribution opportunities, embedded separately so a "good first issue" can surface on its own merits |
@@ -179,6 +183,135 @@ Requested scopes are `read:user` and `user:email`, declared in
 `client/src/lib/supabase/config.ts`. Neither grants repository write access or
 reaches private repositories.
 
+## Profile analysis
+
+At first sign-in Contribly reads a developer's public GitHub activity and turns
+it into something matchable: a detected stack, a language distribution, a
+contribution level, and a set of interests. The user then confirms and extends
+it through a four-step questionnaire.
+
+**v1 is entirely deterministic.** Every number comes from arithmetic over
+GitHub's REST responses plus a curated keyword table. That is not a placeholder
+to apologise for — it is what makes the output explainable, replayable against
+fixtures, and free of an external AI dependency. The AI phase replaces two
+specific pieces, `taxonomy.ts` and the null embedding, not the architecture.
+
+Design decisions and their reasoning are in
+[`docs/profile-analysis-v1.md`](docs/profile-analysis-v1.md).
+
+### What it reads
+
+Six calls, ~39 requests, all public-data endpoints. The stored token is there
+for the rate limit (5,000/hour rather than 60 shared per IP), not for access —
+nothing here reaches anything `read:user` does not already allow.
+
+| Endpoint | Yields |
+| -------- | ------ |
+| `GET /user` | Identity and account age |
+| `GET /users/{login}/repos` | Repositories, topics, stars, push dates |
+| `GET /repos/{owner}/{repo}/languages` | Byte counts, for the 30 most recently pushed |
+| `GET /users/{login}/events/public` | ~90 days of pushes, PRs, reviews, comments |
+| `GET /users/{login}/starred` | Interest signal |
+| `GET /search/issues` | Merged PRs into repos the user does not own |
+
+That last one is the most valuable number in the analysis: it is the only
+direct evidence that someone has contributed to open source, which is the exact
+behaviour being matched for. Everything else is a proxy for it.
+
+Only the first two are load-bearing. The rest degrade individually and record
+what failed in `analysis.sources`, which the dashboard surfaces — a sync that
+lost the starred list is worth more than a sync that failed.
+
+### What it derives
+
+`server/src/lib/profile/` holds four pure modules — plain GitHub objects in,
+plain data out, no Supabase and no `fetch`:
+
+- **`languages.ts`** — share per language, weighted `sqrt(bytes)` against a
+  12-month recency half-life, quartered for forks, boosted by recent pushes.
+  The half-life is the load-bearing knob: someone who wrote Java until 2021 and
+  TypeScript this month should read as a TypeScript developer, and their Java
+  repos are usually much bigger.
+- **`frameworks.ts`** + **`taxonomy.ts`** — GitHub says a repo is 62%
+  TypeScript, not that it is a Next.js app. A ~130-entry alias table recovers
+  the difference from topics, descriptions and stars. Two independent mentions
+  are required, forks and repositories untouched for three years do not count as
+  evidence, and stars alone can never claim experience.
+- **`complexity.ts`** — six weighted components summing to 0–100, banded into
+  `public.complexity_level`. Each records a plain-language note, because the
+  dashboard has to answer "why did you call me intermediate?" with the actual
+  arithmetic.
+- **`interests.ts`** — topics from stars and forks, kept separate from the
+  detected stack. Someone with forty Python repos who stars nothing but Rust is
+  saying where they want to go.
+
+Pure by design so `analyze-fixture.ts` can replay saved API responses through
+the exact derivation the server runs. Every weight above is a guess until it is
+checked against real accounts, and checking against the live API would be slow,
+rate-limited and different every run:
+
+```bash
+export GITHUB_TOKEN=...    # a classic PAT, no scopes needed
+npm run fixture:capture --workspace=server -- torvalds
+npm run fixture:analyze --workspace=server -- torvalds
+```
+
+### Honesty about thin profiles
+
+Under three public repositories and no recent events, the analysis sets
+`confidence: 'low'` rather than asserting a level, and the dashboard says so.
+Plenty of strong developers have empty public profiles because their work sits
+behind a company firewall, and quietly labelling a principal engineer a beginner
+is a worse failure than admitting we cannot tell. Confidence is also capped at
+`medium` whenever any source failed.
+
+For the same reason, a rate-limited `GET /search/issues` scores zero points but
+reports that it could not be read — otherwise a failed request and a genuine
+absence of contributions look identical, a 30-point swing with nothing to
+distinguish them.
+
+### How it runs
+
+```
+POST /api/v1/auth/session        (the token is captured here)
+  └─ kickProfileSync(userId)     fire-and-forget
+       sync_status = 'running' → analyse → 'ready' | 'failed'
+```
+
+In-process and in the background — no queue, no worker container. A single job
+type that runs once per user per six hours does not earn a fourth service.
+
+The failure mode that buys is real, and handled rather than hidden: an
+in-process task dies with the process, leaving `sync_status = 'running'`
+forever. `GET /api/v1/me` treats a run older than ten minutes as abandoned and
+re-kicks it. When that stops being good enough, the answer is a worker
+container, and nothing in the current design obstructs it.
+
+Meanwhile the client polls `GET /api/v1/me`. Because the sync starts at the
+OAuth callback, it runs *while* the user answers the questionnaire — twenty
+seconds of GitHub calls disappear behind three questions they were going to
+answer anyway.
+
+### Stated preferences
+
+The derived signals say what a developer has done; only the questionnaire says
+what they want. `/onboarding` collects four things, all skippable and editable
+later from the dashboard: a correction pass on the detected stack, languages
+they want to work in, free-text learning goals, and why they are here plus how
+much time and how much difficulty they want.
+
+Two columns are easy to conflate and deliberately separate:
+
+- `complexity_level` is what the analysis thinks they *are*.
+- `difficulty_preference` is what they want to *take on*. An expert wanting a
+  quiet weekend and a beginner spoiling for a fight both break if you merge
+  these, and `repositories.contribution_difficulty` already exists to match
+  against.
+
+Editing the detected stack stamps `tech_stack_edited_at`, which permanently
+hands that column from the sync to the user. Without it, every re-sync would
+quietly undo the correction they just made.
+
 ## API
 
 | Method | Route                  | Auth     | Purpose                                          |
@@ -186,8 +319,11 @@ reaches private repositories.
 | `GET`  | `/health`              | —        | Liveness; backs the Docker healthcheck           |
 | `GET`  | `/health/ready`        | —        | Readiness; 503 when Supabase is unconfigured     |
 | `GET`  | `/api/v1`              | —        | API index                                        |
-| `POST` | `/api/v1/auth/session` | Bearer   | Sync profile and store the GitHub token          |
+| `POST` | `/api/v1/auth/session` | Bearer   | Sync profile, store the GitHub token, start the analysis |
 | `GET`  | `/api/v1/me`           | Bearer   | The signed-in developer's profile                |
+| `POST` | `/api/v1/me/sync`      | Bearer   | Start a profile analysis; `?force=1` skips the throttle |
+| `GET`  | `/api/v1/me/analysis`  | Bearer   | The full derivation behind the profile           |
+| `PATCH`| `/api/v1/me/preferences` | Bearer | Onboarding answers and manual stack corrections  |
 
 Feature routers mount onto `apiRouter` in `server/src/routes/index.ts`. Routes
 marked Bearer run through `requireAuth`, which validates the Supabase session
@@ -204,12 +340,17 @@ JWT from the `Authorization` header.
 | `npm run docker:up`    | Build and start the stack                   |
 | `npm run docker:down`  | Stop the stack                              |
 | `npm run docker:reset` | Stop and drop the database volume           |
+| `npm run fixture:capture --workspace=server -- <login>` | Save a GitHub account's API responses to `server/fixtures/` |
+| `npm run fixture:analyze --workspace=server -- <login>` | Replay a fixture through the derivation |
 
 ## Next steps
 
-1. A profile-sync worker that derives `tech_stack` and `complexity_level` from
-   commit history, using the token in `github_credentials`.
-2. An ingestion job that indexes repositories and issues into the vector tables.
-3. `POST /api/v1/recommendations` — embed the profile, call the match RPCs, and
-   rerank.
-4. Move `github_credentials.access_token` into Supabase Vault.
+1. An ingestion job that indexes repositories and issues into the vector tables.
+2. `POST /api/v1/recommendations`. With embeddings deferred, its first cut is a
+   SQL filter over `preferred_languages` × `difficulty_preference` ×
+   `has_good_first_issues` rather than a call to the match RPCs.
+3. Tune the heuristics in `server/src/lib/profile/` against real fixtures. Every
+   weight there is a defensible guess, and none has yet met a real account.
+4. Embeddings: assemble the profile text, fill `profile_embedding`, and switch
+   matching over to `match_repositories()`.
+5. Move `github_credentials.access_token` into Supabase Vault.

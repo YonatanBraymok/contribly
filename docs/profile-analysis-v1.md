@@ -172,11 +172,11 @@ matching query needs to *filter* on gets promoted to a real column later.
 One migration, `supabase/migrations/20260818000000_profile_analysis.sql`.
 
 ```sql
-create type public.sync_status as enum ('pending','running','ready','failed');
+create type public.profile_sync_status as enum ('pending','running','ready','failed');
 
 alter table public.users
   -- sync lifecycle
-  add column sync_status public.sync_status not null default 'pending',
+  add column sync_status public.profile_sync_status not null default 'pending',
   add column sync_started_at timestamptz,
   add column sync_error text,
   -- questionnaire (what they want)
@@ -254,16 +254,24 @@ server/src/lib/github/
   endpoints.ts     the six typed calls above
 server/src/lib/profile/
   taxonomy.ts      alias → canonical framework/tool table
+  frameworks.ts    evidence rules over that table   (pure)
   languages.ts     the proficiency formula          (pure)
   complexity.ts    the scorer and its bands         (pure)
   interests.ts     topic aggregation                (pure)
-  analyze.ts       fetch → derive → ProfileAnalysis
+  time.ts          shared date arithmetic           (pure)
+  types.ts         the ProfileAnalysis shape
+  analyze.ts       fetchRawProfile + deriveProfile
   sync.ts          run lifecycle and persistence
-server/src/routes/profile.routes.ts
+server/src/routes/me.routes.ts
 ```
 
-The four pure modules take plain GitHub response objects and return plain data —
-no Supabase, no fetch. That is what makes section 6 possible.
+The pure modules take plain GitHub response objects and return plain data — no
+Supabase, no fetch. That is what makes section 6 possible.
+
+`analyze.ts` splits along the same line: `fetchRawProfile` is the only function
+that touches the network, and `deriveProfile` is pure. Everything the six calls
+returned is JSON-serialisable by construction, which is exactly what a fixture
+needs to be.
 
 ## 5. Client
 
@@ -292,11 +300,17 @@ distinct section, and a re-sync button hitting `?force=1`.
 ## 6. Tuning and verification
 
 The repo has no test framework, and v1 should not drag one in. What it should
-add is `server/scripts/analyze-fixture.ts`: capture one real account's six API
-responses to JSON, then run the pure modules over that fixture and print the
+add is `server/src/scripts/analyze-fixture.ts`: capture one real account's six
+API responses to JSON, then run the pure modules over that fixture and print the
 resulting `ProfileAnalysis`. Heuristics get tuned in a second with no network
 and no rate limit, and the fixtures become the regression suite the day a test
 runner arrives.
+
+It lives under `src/` rather than beside it so `npm run typecheck` covers it —
+the harness that keeps the derivation honest should not be the one file nothing
+checks. Analysis is pinned to the capture's `captured_at`, so a fixture taken
+today still scores identically next year; without that, every recency weight
+would drift and no two runs would agree.
 
 Three fixtures worth capturing: a heavy OSS contributor, a working developer with
 few external PRs, and a near-empty account — the last one being the cold-start
@@ -321,3 +335,60 @@ Steps 1–3 are the substance; 4–5 are wiring.
   `preferred_languages` × `difficulty_preference` × `has_good_first_issues`.
 - Private-repo signals, contribution history snapshots, org affiliation,
   README-content analysis, and any scheduled re-sync beyond the 6-hour throttle.
+
+---
+
+## Appendix — changes made during implementation
+
+Recorded because a design doc that quietly disagrees with the code is worse than
+no design doc.
+
+**Structural**
+
+- Routes live in `me.routes.ts` rather than a new `profile.routes.ts`. Every one
+  of them is under `/api/v1/me/*`, so a second router mounted at the same path
+  would have been indirection for its own sake.
+- `frameworks.ts` split from `taxonomy.ts`. The table is the vocabulary; the
+  evidence rules are the judgement. Separating them means the AI phase can
+  replace the vocabulary without touching the logic that decides how much
+  evidence is enough.
+- `analyze.ts` split into `fetchRawProfile` and a pure `deriveProfile`, so the
+  fixture harness exercises the *same* derivation the server runs rather than a
+  reimplementation of it.
+- The enum is `public.profile_sync_status`; `sync_status` was too generic a name
+  to take in the public schema.
+
+**Found by running the derivation over fixtures**
+
+The first fixture run produced four problems the design had not anticipated.
+This is what section 6 is for.
+
+- **Config formats crowded out real languages.** `Dockerfile`, `Makefile` and
+  `XML` are linguist languages and were landing in the top ten and in
+  `tech_stack`. Now dropped outright.
+- **Markup inflated the breadth score.** `CSS` and `HTML` counted toward
+  "languages used substantially", handing three of five breadth points to
+  anyone who has shipped a web page. They stay in the proficiency breakdown,
+  where they honestly describe the repositories, but are excluded from
+  `tech_stack` and from breadth.
+- **Forks were claimed as experience.** A forked PyTorch harness put PyTorch in
+  the user's stack — its topics and description were written by whoever built
+  the original. Forks are now demoted to the same evidence tier as stars, and
+  their descriptions are ignored entirely.
+- **Stale repositories spoke for a current stack.** A Spring service last
+  touched in 2022 was still evidence. Framework evidence now expires at 36
+  months.
+
+**Fidelity fixes**
+
+- `externalPrsAvailable` distinguishes "the search call failed" from "this
+  person has never contributed". Both score zero, but only one of them is a
+  claim — and left undistinguished it is a silent 30-point swing, enough to move
+  someone two bands.
+- Confidence is capped at `medium` whenever any source failed. `high` asserts we
+  saw enough to be sure, which a sync missing a source did not.
+
+**Incidental**
+
+- `client/package.json` had no `typecheck` script, so the root `npm run
+  typecheck` had always failed at the second workspace. Added.
