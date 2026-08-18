@@ -16,7 +16,7 @@ export async function signInWithGitHub(formData: FormData): Promise<void> {
   const next = safeNextPath(formData.get("next"));
   const origin = await getSiteOrigin();
 
-  const callbackUrl = new URL("/auth/callback", origin);
+  const callbackUrl = new URL("/login/callback", origin);
   callbackUrl.searchParams.set("next", next);
 
   const supabase = await createClient();
@@ -32,7 +32,7 @@ export async function signInWithGitHub(formData: FormData): Promise<void> {
 
   if (error || !authorizeUrl) {
     console.error("Could not start GitHub OAuth:", error?.message);
-    redirect("/auth?error=start_failed");
+    redirect("/login?error=start_failed");
   }
 
   // Hands the browser to GitHub's consent screen.

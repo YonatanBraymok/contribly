@@ -150,23 +150,23 @@ policies compare against `auth.uid()` without a join.
 ### The flow
 
 ```
-/auth                     "Continue with GitHub" (Server Action)
+/login                    "Continue with GitHub" (Server Action)
   -> github.com/login/oauth/authorize        consent screen
   -> <project>.supabase.co/auth/v1/callback  Supabase exchanges with GitHub
-  -> /auth/callback?code=...                 exchangeCodeForSession sets cookies
+  -> /login/callback?code=...                exchangeCodeForSession sets cookies
        -> POST /api/v1/auth/session          profile sync + token capture
   -> /dashboard
 ```
 
-`src/proxy.ts` guards every route. `/` and `/auth` are public; everything else
-redirects to `/auth?next=<path>` without a session. It is named `proxy.ts`
+`src/proxy.ts` guards every route. `/` and `/login` are public; everything else
+redirects to `/login?next=<path>` without a session. It is named `proxy.ts`
 because Next.js 16 deprecated the `middleware.ts` convention and renamed it.
 
 ### The GitHub token
 
 Supabase returns GitHub's access token as `provider_token` **only** on the
 response to the initial code exchange — it is not kept in the session and is
-never refreshed. `/auth/callback` forwards it to the API, which stores it in
+never refreshed. `/login/callback` forwards it to the API, which stores it in
 `github_credentials` so the profile-sync worker can call GitHub as the user at
 5,000 requests/hour rather than the anonymous 60.
 
