@@ -1,6 +1,13 @@
 import { apiFetch, type ApiResult } from "@/lib/api";
 import { createClient } from "@/lib/supabase/server";
 
+export type SyncStatus = "pending" | "running" | "ready" | "failed";
+export type ComplexityLevel =
+  | "beginner"
+  | "intermediate"
+  | "advanced"
+  | "expert";
+
 /** The profile shape returned by GET /api/v1/me. */
 export interface Profile {
   id: string;
@@ -10,9 +17,55 @@ export interface Profile {
   avatar_url: string | null;
   tech_stack: string[];
   language_proficiency: Record<string, number>;
-  complexity_level: string;
+  complexity_level: ComplexityLevel;
+  complexity_score: number | null;
   learning_goals: string[];
+  preferred_languages: string[];
+  contribution_goals: string[];
+  weekly_hours: number | null;
+  difficulty_preference: ComplexityLevel | null;
+  onboarding_completed_at: string | null;
+  tech_stack_edited_at: string | null;
+  sync_status: SyncStatus;
+  sync_started_at: string | null;
+  sync_error: string | null;
   last_synced_at: string | null;
+}
+
+/** Mirrors the server's ProfileAnalysis — see server/src/lib/profile/types.ts. */
+export interface ProfileAnalysis {
+  version: number;
+  generated_at: string;
+  confidence: "low" | "medium" | "high";
+  github: {
+    login: string;
+    account_created_at: string | null;
+    public_repos: number;
+    followers: number;
+    non_fork_repos: number;
+    max_stars: number;
+    external_merged_prs: number;
+    active_months_last_year: number;
+    events_analysed: number;
+    events_window_days: number;
+    external_collaboration_events: number;
+  };
+  languages: { name: string; share: number; bytes: number; repos: number }[];
+  frameworks: {
+    name: string;
+    mentions: number;
+    sources: ("topic" | "description" | "starred")[];
+  }[];
+  interests: { topic: string; count: number }[];
+  complexity: {
+    score: number;
+    level: ComplexityLevel;
+    components: Record<
+      string,
+      { points: number; max: number; note: string }
+    >;
+  };
+  sources: { endpoint: string; ok: boolean; error?: string }[];
 }
 
 /**
@@ -49,4 +102,48 @@ export async function apiFetchAuthed<T>(
 /** The current user's profile, or an error the page can render around. */
 export function fetchProfile(): Promise<ApiResult<{ profile: Profile }>> {
   return apiFetchAuthed<{ profile: Profile }>("/api/v1/me");
+}
+
+/**
+ * The full derivation behind the profile.
+ *
+ * Null until the first sync finishes — the column defaults to an empty object,
+ * and the API turns that into an explicit null so callers can tell "not yet"
+ * from "nothing found".
+ */
+export function fetchAnalysis(): Promise<
+  ApiResult<{ analysis: ProfileAnalysis | null }>
+> {
+  return apiFetchAuthed<{ analysis: ProfileAnalysis | null }>(
+    "/api/v1/me/analysis",
+  );
+}
+
+export interface PreferencesUpdate {
+  tech_stack?: string[];
+  learning_goals?: string[];
+  preferred_languages?: string[];
+  contribution_goals?: string[];
+  weekly_hours?: number | null;
+  difficulty_preference?: ComplexityLevel | null;
+  complete_onboarding?: boolean;
+}
+
+export function savePreferences(
+  update: PreferencesUpdate,
+): Promise<ApiResult<{ profile: Profile }>> {
+  return apiFetchAuthed<{ profile: Profile }>("/api/v1/me/preferences", {
+    method: "PATCH",
+    body: JSON.stringify(update),
+  });
+}
+
+/** Kicks a background re-sync. Returns immediately; poll the profile for the result. */
+export function requestSync(
+  force = false,
+): Promise<ApiResult<{ outcome: string; sync_status: SyncStatus }>> {
+  return apiFetchAuthed<{ outcome: string; sync_status: SyncStatus }>(
+    `/api/v1/me/sync${force ? "?force=1" : ""}`,
+    { method: "POST" },
+  );
 }
