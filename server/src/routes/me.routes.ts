@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { kickProfileSync, recoverStaleSync } from '../lib/profile/sync.js';
+import { matchTopic } from '../lib/profile/taxonomy.js';
 import {
   getAnalysis,
   getProfile,
@@ -46,6 +47,24 @@ const preferencesSchema = z
     complete_onboarding: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * Rewrites a hand-typed technology to the name the rest of the system uses.
+ *
+ * Someone editing their stack types "nextjs" or "react"; ingestion stores
+ * "Next.js" and "React", because both sides are canonicalised through the same
+ * taxonomy. Normalising on the way in keeps `tech_stack` in one vocabulary,
+ * which matters for how it reads back on the dashboard and for the profile text
+ * the embedding phase will eventually assemble from it.
+ *
+ * Anything the taxonomy does not recognise is kept exactly as typed — a stack
+ * editor that quietly discards what you wrote is worse than one that stores an
+ * unusual spelling. Matching stays case-insensitive in the database regardless,
+ * so an unrecognised "typescript" still finds TypeScript repositories.
+ */
+function canonicalise(values: string[]): string[] {
+  return values.map((value) => matchTopic(value) ?? value);
+}
 
 /** Case-insensitive de-duplication, keeping the first spelling seen. */
 function dedupe(values: string[]): string[] {
@@ -146,7 +165,12 @@ meRouter.patch('/preferences', requireAuth, async (req, res, next) => {
 
     const update: PreferencesUpdate = {
       ...fields,
-      ...(fields.tech_stack ? { tech_stack: dedupe(fields.tech_stack), tech_stack_edited_at: now } : {}),
+      ...(fields.tech_stack
+        ? {
+            tech_stack: dedupe(canonicalise(fields.tech_stack)),
+            tech_stack_edited_at: now,
+          }
+        : {}),
       ...(fields.learning_goals ? { learning_goals: dedupe(fields.learning_goals) } : {}),
       ...(fields.preferred_languages
         ? { preferred_languages: dedupe(fields.preferred_languages) }

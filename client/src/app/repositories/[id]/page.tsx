@@ -19,8 +19,9 @@ export default async function RepositoryPage({
       <p className="font-mono text-sm opacity-60">id: {id}</p>
 
       <p className="max-w-2xl opacity-70">
-        Repository detail, matched issues, and the reasoning behind the match
-        will render here once the matching endpoint is implemented.
+        Repository detail and matched issues will render here. Recommendations
+        themselves are live on <code>/recommendations</code>; this page is for
+        the per-repository view, which needs issue ingestion first.
       </p>
     </div>
   );

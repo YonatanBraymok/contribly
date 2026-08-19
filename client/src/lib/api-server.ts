@@ -138,6 +138,39 @@ export function savePreferences(
   });
 }
 
+export interface Recommendation {
+  id: string;
+  full_name: string;
+  description: string | null;
+  html_url: string;
+  primary_language: string | null;
+  topics: string[];
+  tech_tags: string[];
+  stars: number;
+  open_issues_count: number;
+  contribution_difficulty: ComplexityLevel | null;
+  has_good_first_issues: boolean;
+  last_commit_at: string | null;
+  /** Which of the user's technologies this repository shares — the "why". */
+  matched_tech: string[];
+  overlap: number;
+}
+
+/**
+ * Four outcomes, because three different situations produce zero results and
+ * each needs a different thing said about it. See the server's
+ * lib/recommendations.ts.
+ */
+export type RecommendationResult =
+  | { status: "ok"; recommendations: Recommendation[]; techStack: string[] }
+  | { status: "insufficient_stack"; techStack: string[]; required: number }
+  | { status: "empty_corpus" }
+  | { status: "no_matches"; techStack: string[] };
+
+export function fetchRecommendations(): Promise<ApiResult<RecommendationResult>> {
+  return apiFetchAuthed<RecommendationResult>("/api/v1/recommendations");
+}
+
 /** Kicks a background re-sync. Returns immediately; poll the profile for the result. */
 export function requestSync(
   force = false,
