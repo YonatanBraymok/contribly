@@ -221,4 +221,20 @@ export function knownFrameworks(): string[] {
   return Object.keys(FRAMEWORKS);
 }
 
+/**
+ * Each framework paired with the GitHub topic most likely to find it.
+ *
+ * The first alias is the canonical GitHub topic by construction — the table is
+ * written that way. Corpus ingestion searches on these, which is what
+ * guarantees the corpus is describable in the same vocabulary a profile is:
+ * a repository we cannot name in these terms is one we could never match.
+ */
+export function frameworkTopics(): { canonical: string; topic: string }[] {
+  return Object.entries(FRAMEWORKS).flatMap(([canonical, aliases]) => {
+    const topic = aliases[0];
+
+    return topic ? [{ canonical, topic }] : [];
+  });
+}
+
 export type { FrameworkSource };

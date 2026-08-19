@@ -35,6 +35,7 @@ contribly/
 │   ├── src/lib/supabase.ts Service-role Supabase client
 │   ├── src/lib/github/     Minimal GitHub REST client
 │   ├── src/lib/profile/    Profile analysis — see below
+│   ├── src/lib/ingest/     Corpus ingestion from GitHub search
 │   ├── src/scripts/        Fixture harness for tuning the heuristics
 │   └── Dockerfile          deps → dev → build → production
 ├── supabase/
@@ -90,7 +91,7 @@ Migrations live in `supabase/migrations/` and are plain, Supabase-native SQL.
 | -------------------- | -------------------------------------------------------------- |
 | `users`              | Profile: detected stack, complexity level, stated preferences, the `analysis` blob behind them, and the `profile_embedding` that will become the match query |
 | `github_credentials` | The user's GitHub access token. Service-role only — RLS on, no policies |
-| `repositories` | Curated corpus with an `embedding` over description + topics + language |
+| `repositories` | Curated corpus. `tech_tags` holds canonical technology names — the column v1 matching runs on — alongside an `embedding` for later |
 | `issues`       | Individual contribution opportunities, embedded separately so a "good first issue" can surface on its own merits |
 
 Both corpus tables carry a `vector(1536)` column indexed with HNSW over cosine
@@ -312,6 +313,104 @@ Editing the detected stack stamps `tech_stack_edited_at`, which permanently
 hands that column from the sync to the user. Without it, every re-sync would
 quietly undo the correction they just made.
 
+## Recommendations
+
+v1 recommends up to five repositories that share **at least two technologies**
+with the developer's detected stack, best match first. No embeddings, no
+ranking model — a set intersection, indexed and explainable, which is the
+foundation the semantic version ranks on top of later.
+
+### The vocabulary problem
+
+A user's `tech_stack` holds canonical names — `React`, `Next.js`, `TypeScript` —
+produced by `profile/taxonomy.ts`. A repository carries raw GitHub topics:
+`reactjs`, `nextjs`, `react-js`. Those two sets never intersect, so the obvious
+query returns nothing forever.
+
+So ingestion runs every repository's topics through the *same* taxonomy and
+stores the canonical result in `repositories.tech_tags`. Both sides end up
+speaking one vocabulary, and matching collapses to an array overlap:
+
+```sql
+select * from recommend_repositories(
+  p_tech_tags           => array['TypeScript','React','Docker'],
+  p_min_overlap         => 2,
+  p_limit               => 5,
+  p_preferred_languages => array['TypeScript'],   -- tiebreak only
+  p_difficulty          => 'beginner',            -- tiebreak only
+  p_exclude_owner       => 'their-github-login'
+);
+```
+
+`tech_stack` is user-editable, so matching is case-insensitive: a stored
+generated column `tech_tags_lower` carries the GIN index while `tech_tags`
+keeps the spelling worth displaying. Someone who types `react` into the stack
+editor still matches React, and the response still reads "React".
+
+### Ranking
+
+A cascade rather than a blended score, because every tier is a sentence a user
+can be told:
+
+1. **How many of their technologies it touches.** The point of the feature.
+2. A language they said they want to work in.
+3. Pitched at the difficulty they asked for.
+4. Has good first issues.
+5. Stars — last, and only as a tiebreak. Leading with popularity would
+   recommend the same five famous repositories to everybody.
+
+Tiers 2 and 3 are the stated preferences from onboarding, and they only ever
+reorder repositories that already qualify. Nothing gets onto the list because
+someone said they would like to learn Rust; the two-technology rule runs against
+what they actually hold.
+
+Recommendations are computed per request rather than stored. The query is one
+indexed array overlap over a few thousand rows, and a cached list that ignores a
+stack the user corrected two minutes ago is worse than no cache.
+
+### Zero results, three ways
+
+Three quite different situations return nothing, and the API distinguishes them
+because "no results" is useless advice when the fix is one click away:
+
+| `status` | Means | What the page says |
+| -------- | ----- | ------------------ |
+| `insufficient_stack` | Fewer than two technologies on the profile | Invites them to add some, and points out that private work is the usual reason |
+| `no_matches` | Real stack, real corpus, no overlap | Says the corpus is still small and offers the stack editor |
+| `empty_corpus` | Nothing indexed | A setup note with the ingestion command — an operator problem, not a user one |
+
+The first is the cold-start case from the profile analysis, and it is common:
+plenty of strong developers have thin public profiles. Padding the page with
+generic popular repositories would hide the one thing they need to do.
+
+### Seeding the corpus
+
+```bash
+export GITHUB_TOKEN=...      # a classic PAT, no scopes needed
+npm run ingest:repos --workspace=server -- --limit 5    # check credentials first
+npm run ingest:repos --workspace=server                 # full sweep, ~5 minutes
+```
+
+126 searches, one per technology in the taxonomy plus one per major language,
+paced 2.2s apart to stay inside the search API's 30-requests-per-minute limit —
+two orders of magnitude tighter than the rest of GitHub's API. Re-running is
+safe; every row upserts on `github_id`.
+
+Two filters worth knowing about:
+
+- **Every query requires `good-first-issues:>0`.** As much a product decision as
+  a filter: a repository with no marked way in is a worse recommendation than a
+  less popular one that has them, and it means `has_good_first_issues` is known
+  rather than guessed. Widening the corpus is a second pass without it.
+- **Repositories with fewer than two recognised technologies are dropped.** They
+  could never satisfy a two-technology match, so storing them only adds rows.
+
+`contribution_difficulty` is derived from star count alone and is a proxy for
+project *weight* — how much context, process and review a change has to pass
+through — not for issue difficulty. A 300-star tool takes a patch; a
+200,000-star framework takes a proposal, a discussion and three reviewers.
+Reading the issues themselves is what would make it real.
+
 ## API
 
 | Method | Route                  | Auth     | Purpose                                          |
@@ -324,6 +423,7 @@ quietly undo the correction they just made.
 | `POST` | `/api/v1/me/sync`      | Bearer   | Start a profile analysis; `?force=1` skips the throttle |
 | `GET`  | `/api/v1/me/analysis`  | Bearer   | The full derivation behind the profile           |
 | `PATCH`| `/api/v1/me/preferences` | Bearer | Onboarding answers and manual stack corrections  |
+| `GET`  | `/api/v1/recommendations` | Bearer | Repositories sharing ≥2 technologies with the user's stack |
 
 Feature routers mount onto `apiRouter` in `server/src/routes/index.ts`. Routes
 marked Bearer run through `requireAuth`, which validates the Supabase session
@@ -342,15 +442,17 @@ JWT from the `Authorization` header.
 | `npm run docker:reset` | Stop and drop the database volume           |
 | `npm run fixture:capture --workspace=server -- <login>` | Save a GitHub account's API responses to `server/fixtures/` |
 | `npm run fixture:analyze --workspace=server -- <login>` | Replay a fixture through the derivation |
+| `npm run ingest:repos --workspace=server` | Seed `repositories` from GitHub search |
 
 ## Next steps
 
-1. An ingestion job that indexes repositories and issues into the vector tables.
-2. `POST /api/v1/recommendations`. With embeddings deferred, its first cut is a
-   SQL filter over `preferred_languages` × `difficulty_preference` ×
-   `has_good_first_issues` rather than a call to the match RPCs.
-3. Tune the heuristics in `server/src/lib/profile/` against real fixtures. Every
-   weight there is a defensible guess, and none has yet met a real account.
-4. Embeddings: assemble the profile text, fill `profile_embedding`, and switch
-   matching over to `match_repositories()`.
+1. Tune the heuristics in `server/src/lib/profile/` against real fixtures, and
+   run a real ingestion sweep. Every weight in the analysis is a defensible
+   guess, and none has yet met a live GitHub response.
+2. Issue ingestion, so `/repositories/[id]` can show specific work to pick up
+   rather than only the repository that has it.
+3. Widen the corpus: a second ingestion pass without the `good-first-issues:>0`
+   qualifier, for developers past their first contribution.
+4. Embeddings: assemble the profile text, fill `profile_embedding`, and let
+   semantic similarity rank what the tech overlap has already shortlisted.
 5. Move `github_credentials.access_token` into Supabase Vault.

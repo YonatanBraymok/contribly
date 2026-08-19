@@ -38,9 +38,12 @@ export interface GitHubRepo {
   topics: string[] | null;
   stargazers_count: number;
   forks_count: number;
+  open_issues_count: number;
   pushed_at: string | null;
   created_at: string | null;
   html_url: string;
+  homepage: string | null;
+  license: { spdx_id: string | null; key: string | null } | null;
 }
 
 /** Byte counts keyed by language, straight from linguist. */
@@ -61,6 +64,12 @@ export interface GitHubEvent {
 /** Only `total_count` is read; per_page=1 keeps the payload to one item. */
 interface SearchCount {
   total_count: number;
+}
+
+export interface RepoSearchResult {
+  total_count: number;
+  incomplete_results: boolean;
+  items: GitHubRepo[];
 }
 
 export async function fetchViewer(client: GitHubClient): Promise<GitHubUser> {
@@ -168,4 +177,21 @@ export async function countExternalMergedPrs(
   });
 
   return result.total_count ?? 0;
+}
+
+/**
+ * Repository search, used by the corpus ingestion job.
+ *
+ * The search API has its own limit — 30 requests per minute rather than the
+ * 5,000 per hour the rest of these share — so the caller is responsible for
+ * pacing. See server/src/lib/ingest/repositories.ts.
+ */
+export async function searchRepositories(
+  client: GitHubClient,
+  query: string,
+  perPage = 30,
+): Promise<RepoSearchResult> {
+  return client.request<RepoSearchResult>('/search/repositories', {
+    searchParams: { q: query, sort: 'stars', order: 'desc', per_page: perPage },
+  });
 }

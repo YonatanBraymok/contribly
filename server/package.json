@@ -11,7 +11,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "fixture:capture": "tsx src/scripts/analyze-fixture.ts capture",
-    "fixture:analyze": "tsx src/scripts/analyze-fixture.ts analyze"
+    "fixture:analyze": "tsx src/scripts/analyze-fixture.ts analyze",
+    "ingest:repos": "tsx src/scripts/ingest-repositories.ts"
   },
   "engines": {
     "node": ">=20.0.0"
